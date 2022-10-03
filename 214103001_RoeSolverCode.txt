@@ -1,0 +1,131 @@
+from numpy import*
+from matplotlib.pyplot import*
+
+GA=1.4                                         #gamma     
+unl=array([5.99924,19.5975,460.894])           #[density  velocity  pressure]
+unr=array([5.99242,-6.19633,46.0950])
+
+Ul=zeros(3)                  #[rho    rhoU    rhoE]
+Ur=zeros(3)
+eps = 10**(-6)
+
+Ul[0]=unl[0]
+Ur[0]=unr[0]
+Ul[1]=unl[0]*unl[1]
+Ur[1]=unr[0]*unr[1]
+Ul[2]=unl[0]*(unl[1]**2)*0.5 + unl[2]/(GA-1)
+Ur[2]=unr[0]*(unr[1]**2)*0.5 + unr[2]/(GA-1)
+
+
+# Formulation of grid point
+xl=0
+xr=1
+ncell=int(input("Enter No. of cell within domain:"))
+cfl = float(input("Enter CFL No.:"))
+xnod=linspace(xl,xr,ncell+1)             #pointing the nodes
+
+x=zeros(ncell)                             #distance of the nodes
+for i in range(ncell):
+    x[i]=(xnod[i]+xnod[i+1])/2
+delx=xnod[2]-xnod[1]
+
+
+U = zeros((3,ncell))
+# Initializing the domain at zero time step
+for i in range(ncell):
+    if x[i]<0.5:
+        for j in range(3):
+            U[j][i]=Ul[j]           #[rho    rhoU    rhoE]
+    else:
+        for j in range(3):
+            U[j][i] = Ur[j]         #[rho    rhoU    rhoE]
+EK = zeros((3,3,ncell+1))           #EK eigen vextors
+
+
+time = 0.0
+while (time<0.034):
+    dU1 = zeros(ncell)
+    dU2 = zeros(ncell)
+    dU3 = zeros(ncell)
+    dt = zeros((3, ncell+1))         #dt=deltilda
+    lamb =zeros((3,ncell+1))
+    wr=0
+    wl=0
+    Hr=0
+    Hl=0
+    at=0
+    ut=0                             #t represent tilda values 
+    Ht=0
+    x=zeros(ncell)
+    for i in range(ncell - 1):
+        wr = U[0][i + 1] ** 0.5
+        wl = U[0][i] ** 0.5
+        Hr = ((GA*U[2][i + 1]) - 0.5 * (GA-1)*((U[1][i + 1] **2 )/U[0][i + 1]))/ U[0][i + 1]
+        Hl = ((GA*U[2][i]) - 0.5 * (GA-1)*((U[1][i] **2)/U[0][i]))/ U[0][i]
+
+        ut = ((wr * U[1][i + 1] / U[0][i + 1]) + (wl * U[1][i] / U[0][i])) / (wr + wl)
+        Ht = ((wr * Hr) + (wl * Hl)) / (wr + wl)
+        at = (GA - 1) * (Ht - 0.5 * (ut ** 2)) ** 0.5
+        x[i]  = (Ht - 0.5 * (ut ** 2))
+
+        dU1[i+1] = U[0][i + 1] - U[0][i]
+        dU2[i+1] = U[1][i + 1] - U[1][i]
+        dU3[i+1] = U[2][i + 1] - U[2][i]
+
+        dt[1][i+1] = ((dU1[i+1] * (Ht - (ut ** 2))) + (ut * dU2[i+1]) - dU3[i+1]) * (GA - 1) / (at ** 2)
+        dt[0][i+1] = ((dU1[i+1] * (ut + at)) - dU2[i+1] - (at * dt[1][i+1])) / (2 * at)
+        dt[2][i+1] = dU1[i+1] - dt[0][i+1] - dt[1][i+1]
+
+        lamb[0][i+1] = ut - at
+        lamb[1][i+1] = ut
+        lamb[2][i+1] = ut + at
+
+        EK[:, :, i+1] = [[1, 1, 1], [(ut - at), ut, (ut + at)],
+                           [(Ht - (ut * at)), 0.5 * (ut ** 2), (Ht + (ut * at))]]
+
+    
+    maxLamb = abs(lamb).max()
+    
+
+    flux = zeros((3, ncell))
+    fluxFace = zeros((3, ncell + 1))
+    sum = zeros((3, ncell + 1))
+
+    # Entropy Fix
+    for i in range(ncell):
+        for j in range(3):
+            if (abs(lamb[j][i])<eps):
+                if(lamb[j][i] !=0):
+                    lamb[j][i] = 0.5*((lamb[j][i]/eps) + eps)
+
+   
+    for i in range(ncell):
+        flux[0][i] = U[1][i]
+        flux[1][i] = ((3 - GA)*0.5*(U[1][i]**2)/U[0][i]) + (GA-1)*U[2][i]
+        flux[2][i] = (GA * U[1][i] * U[2][i] / U[0][i]) - ((GA - 1) *0.5* (U[1][i] ** 3) / (U[0][i] ** 2))
+
+
+    # Computing the F i+(1/2) = F i + sum
+    # Computing the F i-(1/2) = F i-1 + sum
+    for i in range(1,ncell):
+        for j in range(3):
+            sum[:, i+1] += abs(lamb[j][i]) * dt[j][i] * EK[:, j, i]
+        # 0th index flux face is the left face of 0th cell
+        # 1st index flux face is the right face of 0th cell
+        # F i+1/2 = 0.5*(Fl + Fr) - 0.5*summation(dt*lambda*eigenVect)
+        fluxFace[:, i] = 0.5*(flux[:, i-1] + flux[:, i]) - 0.5*sum[:, i]
+    fluxFace[:,0]=fluxFace[:,1]
+    fluxFace[:,ncell] = fluxFace[:,ncell-1]
+
+    # U new = U old + delT/delx * ( faceFlux i-1/2  - faceFlux i+1/2 )
+    for i in range(ncell):
+        U[:, i] = U[:, i] + (cfl / maxLamb) * (fluxFace[:, i] - fluxFace[:, i+1])
+
+    time += cfl * delx / maxLamb
+
+
+
+for i in range(ncell):
+   
+    print((GA-1)*(U[2,i]-(0.5*(U[1,i]**2)/U[0,i])))
+print(time)
